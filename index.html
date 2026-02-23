@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Instagram PrivSniffer Web</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 30px;
+            background: #f0f2f5;
+            color: #1e1e1e;
+        }
+        h1 {
+            color: #c13584;
+            border-bottom: 2px solid #c13584;
+            padding-bottom: 10px;
+        }
+        .rate-note {
+            background: #fff3cd;
+            border-left: 6px solid #ffc107;
+            padding: 12px;
+            margin-bottom: 25px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        section {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        input, button {
+            padding: 10px 15px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+        button {
+            background: #c13584;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover:not(:disabled) {
+            background: #a12b6b;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .timer {
+            display: inline-block;
+            margin-left: 15px;
+            font-weight: bold;
+            color: #c13584;
+        }
+        .post {
+            border-left: 4px solid #c13584;
+            background: #f9f9f9;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .post-header {
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            color: #333;
+        }
+        .post-type {
+            color: #c13584;
+        }
+        .post-url {
+            word-break: break-all;
+            background: #eef;
+            padding: 5px;
+            border-radius: 4px;
+            font-family: monospace;
+            margin: 8px 0;
+        }
+        .collab-list {
+            list-style: none;
+            padding-left: 0;
+            margin-top: 5px;
+        }
+        .collab-list li {
+            display: inline-block;
+            background: #ddd;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin-right: 8px;
+            font-size: 0.9em;
+        }
+        .error {
+            color: #d32f2f;
+            background: #ffebee;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #d32f2f;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+        hr {
+            border: 0;
+            height: 1px;
+            background: linear-gradient(to right, #ccc, #c13584, #ccc);
+            margin: 30px 0;
+        }
+        .footer-note {
+            font-size: 0.9em;
+            color: #555;
+            margin-top: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>📸 Instagram PrivSniffer (Educational Web Version)</h1>
+
+    <div class="rate-note">
+        ⏱️ Due to Instagram’s rate limits, each user can make only <strong>one request every 5 minutes</strong>.
+        After you click "Fetch Posts" or "Download", the button will be disabled for 5 minutes.
+    </div>
+
+    <section>
+        <h2>🔍 Fetch collaborated posts by username</h2>
+        <input type="text" id="username" placeholder="e.g., keyloggerluvr" size="40">
+        <button id="fetchBtn" onclick="fetchProfile()">Fetch Posts</button>
+        <span id="fetchTimer" class="timer"></span>
+        <div id="profileOutput" class="loading">Enter a username and click Fetch.</div>
+    </section>
+
+    <section>
+        <h2>⬇️ Download media from a post/reel URL</h2>
+        <input type="text" id="postUrl" placeholder="https://www.instagram.com/username/p/shortcode/" size="60">
+        <button id="downloadBtn" onclick="downloadMedia()">Download</button>
+        <span id="downloadTimer" class="timer"></span>
+        <div class="note" style="margin-top:10px; color:#555;">The file will be downloaded directly. Make sure the URL is correct.</div>
+    </section>
+
+    <hr>
+
+    <div class="footer-note">
+        ⚠️ For educational purposes only. Respect Instagram's terms of service.<br>
+        This tool uses Instagram's internal API in a way Meta has confirmed as intended behaviour for the collaboration feature.
+    </div>
+
+    <script>
+        // Rate limit duration (5 minutes in milliseconds)
+        const RATE_LIMIT_MS = 5 * 60 * 1000;
+
+        // State for fetch button
+        let fetchLastRequestTime = null;
+        let fetchTimerInterval = null;
+        const fetchBtn = document.getElementById('fetchBtn');
+        const fetchTimerSpan = document.getElementById('fetchTimer');
+        const usernameInput = document.getElementById('username');
+        const profileOutput = document.getElementById('profileOutput');
+
+        // State for download button
+        let downloadLastRequestTime = null;
+        let downloadTimerInterval = null;
+        const downloadBtn = document.getElementById('downloadBtn');
+        const downloadTimerSpan = document.getElementById('downloadTimer');
+        const postUrlInput = document.getElementById('postUrl');
+
+        // Helper to format time remaining
+        function formatTimeRemaining(ms) {
+            if (ms <= 0) return '';
+            const minutes = Math.floor(ms / 60000);
+            const seconds = Math.floor((ms % 60000) / 1000);
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        // Update fetch button state and timer
+        function updateFetchButton() {
+            if (!fetchLastRequestTime) {
+                fetchBtn.disabled = false;
+                fetchTimerSpan.textContent = '';
+                if (fetchTimerInterval) {
+                    clearInterval(fetchTimerInterval);
+                    fetchTimerInterval = null;
+                }
+                return;
+            }
+
+            const now = Date.now();
+            const elapsed = now - fetchLastRequestTime;
+            const remaining = RATE_LIMIT_MS - elapsed;
+
+            if (remaining <= 0) {
+                // Rate limit expired
+                fetchLastRequestTime = null;
+                fetchBtn.disabled = false;
+                fetchTimerSpan.textContent = '';
+                if (fetchTimerInterval) {
+                    clearInterval(fetchTimerInterval);
+                    fetchTimerInterval = null;
+                }
+            } else {
+                fetchBtn.disabled = true;
+                fetchTimerSpan.textContent = `⏳ Wait ${formatTimeRemaining(remaining)}`;
+            }
+        }
+
+        // Update download button state and timer
+        function updateDownloadButton() {
+            if (!downloadLastRequestTime) {
+                downloadBtn.disabled = false;
+                downloadTimerSpan.textContent = '';
+                if (downloadTimerInterval) {
+                    clearInterval(downloadTimerInterval);
+                    downloadTimerInterval = null;
+                }
+                return;
+            }
+
+            const now = Date.now();
+            const elapsed = now - downloadLastRequestTime;
+            const remaining = RATE_LIMIT_MS - elapsed;
+
+            if (remaining <= 0) {
+                downloadLastRequestTime = null;
+                downloadBtn.disabled = false;
+                downloadTimerSpan.textContent = '';
+                if (downloadTimerInterval) {
+                    clearInterval(downloadTimerInterval);
+                    downloadTimerInterval = null;
+                }
+            } else {
+                downloadBtn.disabled = true;
+                downloadTimerSpan.textContent = `⏳ Wait ${formatTimeRemaining(remaining)}`;
+            }
+        }
+
+        // Start fetch timer
+        function startFetchTimer() {
+            fetchLastRequestTime = Date.now();
+            updateFetchButton();
+            if (fetchTimerInterval) clearInterval(fetchTimerInterval);
+            fetchTimerInterval = setInterval(updateFetchButton, 1000);
+        }
+
+        // Start download timer
+        function startDownloadTimer() {
+            downloadLastRequestTime = Date.now();
+            updateDownloadButton();
+            if (downloadTimerInterval) clearInterval(downloadTimerInterval);
+            downloadTimerInterval = setInterval(updateDownloadButton, 1000);
+        }
+
+        // Fetch profile function
+        async function fetchProfile() {
+            const username = usernameInput.value.trim();
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+
+            // Disable button immediately to prevent multiple clicks
+            startFetchTimer();
+
+            profileOutput.innerHTML = '<span class="loading">Loading...</span>';
+
+            try {
+                const response = await fetch(`/api/profile?username=${encodeURIComponent(username)}`);
+                
+                if (response.status === 429) {
+                    // Rate limited – keep timer running (already started)
+                    const errorData = await response.json();
+                    profileOutput.innerHTML = `<div class="error">⏳ Rate limit exceeded. Please wait 5 minutes before trying again. ${errorData.error || ''}</div>`;
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.error) {
+                    profileOutput.innerHTML = `<div class="error">❌ Error: ${data.error}</div>`;
+                    // On error (other than 429), we could allow immediate retry? But we stick to 5 min.
+                    return;
+                }
+
+                // Build a nice HTML representation
+                let html = `<div><strong>👤 Username:</strong> ${data.username}</div>`;
+                html += `<div><strong>🔒 Private:</strong> ${data.is_private ? 'Yes' : 'No'}</div>`;
+                html += `<div><strong>📦 Posts found:</strong> ${data.posts.length}</div>`;
+
+                if (data.posts.length === 0) {
+                    html += '<p>No posts to display.</p>';
+                } else {
+                    data.posts.forEach((post, index) => {
+                        const postType = post.is_video ? '🎥 Video' : '🖼️ Image';
+                        const postUrl = `https://www.instagram.com/${post.owner}/${post.is_video ? 'reel' : 'p'}/${post.shortcode}/`;
+                        html += `
+                            <div class="post">
+                                <div class="post-header">
+                                    <span>#${index + 1} – ${postType}</span>
+                                    <span class="post-type">${post.is_video ? 'VIDEO' : 'IMAGE'}</span>
+                                </div>
+                                <div class="post-url">
+                                    <a href="${postUrl}" target="_blank">${postUrl}</a>
+                                </div>
+                                <div><strong>👤 Owner:</strong> <a href="https://www.instagram.com/${post.owner}/" target="_blank">@${post.owner}</a></div>
+                        `;
+                        if (post.collaborators && post.collaborators.length > 0) {
+                            html += '<div><strong>🤝 Collaborators:</strong> <ul class="collab-list">';
+                            post.collaborators.forEach(collab => {
+                                html += `<li><a href="https://www.instagram.com/${collab}/" target="_blank">@${collab}</a></li>`;
+                            });
+                            html += '</ul></div>';
+                        } else {
+                            html += '<div><strong>🤝 Collaborators:</strong> None</div>';
+                        }
+                        html += '</div>';
+                    });
+                }
+
+                profileOutput.innerHTML = html;
+            } catch (err) {
+                profileOutput.innerHTML = `<div class="error">Network error: ${err.message}</div>`;
+                // On network error, we still keep the timer – user must wait.
+            }
+        }
+
+        // Download media function
+        async function downloadMedia() {
+            const url = postUrlInput.value.trim();
+            if (!url) {
+                alert('Please enter a post/reel URL');
+                return;
+            }
+
+            startDownloadTimer();
+
+            try {
+                // We redirect to the download endpoint. Since it's a download, we can't easily catch 429.
+                // Instead, we'll use a fetch to check first, then if OK, trigger download.
+                const checkResponse = await fetch(`/api/download?url=${encodeURIComponent(url)}`, { method: 'HEAD' });
+                
+                if (checkResponse.status === 429) {
+                    // Rate limited – show message and keep timer
+                    const errorData = await checkResponse.json().catch(() => ({}));
+                    alert(`Rate limit exceeded. Please wait 5 minutes. ${errorData.error || ''}`);
+                    return;
+                }
+
+                if (!checkResponse.ok) {
+                    alert(`Error: ${checkResponse.status} – ${checkResponse.statusText}`);
+                    return;
+                }
+
+                // If OK, trigger actual download
+                window.location.href = `/api/download?url=${encodeURIComponent(url)}`;
+            } catch (err) {
+                alert(`Network error: ${err.message}`);
+            }
+        }
+
+        // Initialise button states on page load
+        updateFetchButton();
+        updateDownloadButton();
+    </script>
+</body>
+</html>
